@@ -19,6 +19,10 @@
 #include <lldp/lldp_node.h>
 #include <lldp/lldp_protocol.h>
 #include <vlibmemory/api.h>
+#include <vnet/ip/ip.h>
+#include <sys/time.h>
+
+struct timeval tv;
 
 typedef struct
 {
@@ -28,6 +32,12 @@ typedef struct
   u8 portid_len;
   u8 portid_subtype;
   u16 ttl;
+  //可选TLV部分
+  u8 sysname_len;
+  u8 sysdes_len;
+  u8 pmgnt_ip4_len;
+  u8 pmgnt_ip6_len;
+  //封装数据
   u8 data[0];			/* this contains both chassis id (chassis_id_len bytes) and port
 				   id (portid_len bytes) */
 } lldp_intf_update_t;
@@ -43,8 +53,14 @@ lldp_rpc_update_peer_cb (const lldp_intf_update_t * a)
       /* LLDP turned off for this interface, ignore the update */
       return;
     }
-  const u8 *chassis_id = a->data;
-  const u8 *portid = a->data + a->chassis_id_len;
+
+  u8 offset = 0;
+  
+  const u8 *chassis_id = a->data + offset;
+  offset += a->chassis_id_len;
+  
+  const u8 *portid = a->data + offset;
+  offset += a->portid_len;
 
   if (n->chassis_id)
     {
@@ -52,23 +68,77 @@ lldp_rpc_update_peer_cb (const lldp_intf_update_t * a)
     }
   vec_add (n->chassis_id, chassis_id, a->chassis_id_len);
   n->chassis_id_subtype = a->chassis_id_subtype;
+  
   if (n->port_id)
     {
       vec_set_len (n->port_id, 0);
     }
   vec_add (n->port_id, portid, a->portid_len);
   n->port_id_subtype = a->portid_subtype;
+  
   n->ttl = a->ttl;
   n->last_heard = vlib_time_now (lldp_main.vlib_main);
+  
+
+  //存储mib
+  if(a->sysname_len>0 || a->sysdes_len>0 || a->pmgnt_ip4_len>0 || a->pmgnt_ip6_len>0)
+  {
+	  lldp_mib_t* pMib = (lldp_mib_t*)malloc(sizeof(lldp_mib_t));
+	  pMib->ttl = n->ttl;
+	  
+	  gettimeofday (&tv, NULL);
+		pMib->last_heard = tv.tv_sec;
+
+		pMib->chassis_id = NULL;
+		pMib->chassis_id = format(pMib->chassis_id, "%U", format_lldp_chassis_id, n->chassis_id_subtype, n->chassis_id, vec_len(n->chassis_id), 0);
+
+		pMib->port_id = NULL;
+		pMib->port_id = format(pMib->port_id, "%U", format_lldp_port_id, n->port_id_subtype, n->port_id, vec_len(n->port_id), 0);	
+
+		pMib->sysname = NULL;
+		if(a->sysname_len>0)
+		{
+			vec_add (pMib->sysname, a->data + offset, a->sysname_len);
+			offset += a->sysname_len;
+		}
+		
+		pMib->sysdes = NULL;
+		if(a->sysdes_len>0)
+		{
+			vec_add (pMib->sysdes, a->data + offset, a->sysdes_len);
+			offset += a->sysdes_len;
+		}
+
+		pMib->pmgnt_ip4 = NULL;
+		if(a->pmgnt_ip4_len>0)
+		{
+			pMib->pmgnt_ip4 = format(pMib->pmgnt_ip4, "%U", format_ip4_address, a->data + offset, a->pmgnt_ip4_len);
+			offset += a->pmgnt_ip4_len;
+		}
+		pMib->pmgnt_ip6 = NULL;
+		if(a->pmgnt_ip6_len>0)
+		{
+			pMib->pmgnt_ip6 = format(pMib->pmgnt_ip6, "%U", format_ip6_address, a->data + offset, a->pmgnt_ip6_len);
+			offset += a->pmgnt_ip6_len;
+		}
+
+		//lldp_log_info("LLDPTLV:%ld,%u,%s,%s,%s,%s,%s,%s", pMib->last_heard, pMib->ttl, pMib->chassis_id, pMib->port_id, pMib->pmgnt_ip4, pMib->pmgnt_ip6, pMib->sysname, pMib->sysdes);
+		hashmap_put((&lldp_main)->pLLdpMib, (void*)chassis_id, a->chassis_id_len, (void*)pMib);
+  }
+	
 }
 
 static void
 lldp_rpc_update_peer (u32 hw_if_index, const u8 * chid, u8 chid_len,
 		      u8 chid_subtype, const u8 * portid,
-		      u8 portid_len, u8 portid_subtype, u16 ttl)
+		      u8 portid_len, u8 portid_subtype, u16 ttl,
+		      const u8 *sysname, u8 sysname_len, const u8 *sysdes, u8 sysdes_len, 
+		      const u8 *pmgnt_ip4, u8 pmgnt_ip4_len, const u8 *pmgnt_ip6, u8 pmgnt_ip6_len)
 {
+	//lldp_log_info("LLDP::lldp_rpc_update_peer %d, %d, %d, %d",sysname_len, sysdes_len, pmgnt_ip4_len, pmgnt_ip6_len);
+	
   const size_t data_size =
-    sizeof (lldp_intf_update_t) + chid_len + portid_len;
+    sizeof (lldp_intf_update_t) + chid_len + portid_len + sysname_len + sysdes_len + pmgnt_ip4_len + pmgnt_ip6_len;
   u8 data[data_size];
   lldp_intf_update_t *u = (lldp_intf_update_t *) data;
   u->hw_if_index = hw_if_index;
@@ -77,8 +147,43 @@ lldp_rpc_update_peer (u32 hw_if_index, const u8 * chid, u8 chid_len,
   u->ttl = ttl;
   u->portid_len = portid_len;
   u->portid_subtype = portid_subtype;
-  clib_memcpy (u->data, chid, chid_len);
-  clib_memcpy (u->data + chid_len, portid, portid_len);
+
+  u->sysname_len = sysname_len;
+	u->sysdes_len = sysdes_len;
+	u->pmgnt_ip4_len = pmgnt_ip4_len;
+	u->pmgnt_ip6_len = pmgnt_ip6_len;
+
+	u8 cmoffset = 0;
+	
+	clib_memcpy (u->data + cmoffset, chid, chid_len);
+	cmoffset += chid_len;
+	
+	clib_memcpy (u->data + cmoffset, portid, portid_len);
+	cmoffset += portid_len;
+	
+	if (sysname_len > 0)
+	{
+		clib_memcpy (u->data + cmoffset, sysname, sysname_len);
+		cmoffset += sysname_len;
+	}
+	
+	if (sysdes_len > 0)
+	{
+	  clib_memcpy (u->data + cmoffset, sysdes, sysdes_len);
+	  cmoffset += sysdes_len;
+	}
+	
+	if (pmgnt_ip4_len > 0)
+	{
+	  clib_memcpy (u->data + cmoffset, pmgnt_ip4, pmgnt_ip4_len);
+	  cmoffset += pmgnt_ip4_len;
+	}
+	
+	if(pmgnt_ip6_len > 0)
+	{
+		clib_memcpy (u->data + cmoffset, pmgnt_ip6, pmgnt_ip6_len);
+	}
+
   vl_api_rpc_call_main_thread (lldp_rpc_update_peer_cb, data, data_size);
 }
 
@@ -178,20 +283,59 @@ lldp_packet_scan (u32 hw_if_index, const lldp_tlv_t * pkt)
       return LLDP_ERROR_BAD_TLV;
     }
   u16 ttl = ntohs (((lldp_ttl_tlv_t *) tlv)->ttl);
+
+  u8 *sysname;
+  u8 sysname_len = 0;
+  u8 *sysdes;
+  u8 sysdes_len = 0;
+  u8 *pmgnt_ip4;
+  u8 pmgnt_ip4_len = 0;
+  u8 *pmgnt_ip6;
+  u8 pmgnt_ip6_len = 0;
   tlv = (lldp_tlv_t *) ((u8 *) tlv + STRUCT_SIZE_OF (lldp_tlv_t, head) + l);
   while (!TLV_VIOLATES_PKT_BOUNDARY (pkt, tlv) &&
 	 LLDP_TLV_NAME (pdu_end) != lldp_tlv_get_code (tlv))
     {
       switch (lldp_tlv_get_code (tlv))
 	{
+/*
 #define F(num, type, str)     \
   case LLDP_TLV_NAME (type):  \
-    /* ignore optional TLV */ \
     break;
 	  foreach_lldp_optional_tlv_type (F);
 #undef F
+*/case 4:		//Port Des
+		break;	
+	case 5:
+		sysname_len = *((u8 *)tlv + 1);
+		sysname = (u8 *)tlv + 2;
+		//lldp_log_info("TLV#5:%d", sysname_len);
+		break;
+	case 6:
+		sysdes_len = *((u8 *)tlv + 1);
+		sysdes = (u8 *)tlv + 2;
+		//lldp_log_info("TLV#6:%d", sysdes_len);
+		break;
+	case 7:		//System Capa
+		break;
+	case 8:
+		if(1 == *((u8 *)tlv + 3))
+		{
+			pmgnt_ip4_len = 4;
+			pmgnt_ip4 = (u8 *)tlv + 4;
+		}
+		else if (2 == *((u8 *)tlv + 3))
+		{
+			pmgnt_ip6_len = 16;
+			pmgnt_ip6 = (u8 *)tlv + 4;
+		}
+		//lldp_log_info("TLV#8:%d,%d,%d", *((u8 *)tlv + 3), pmgnt_ip4_len, pmgnt_ip6_len);
+		break;
+	case 127:	//厂商自定义
+		break;
 	default:
-	  return LLDP_ERROR_BAD_TLV;
+		lldp_log_info("TLV##%u", lldp_tlv_get_code (tlv));
+	  //return LLDP_ERROR_BAD_TLV;
 	}
       tlv = (lldp_tlv_t *) ((u8 *) tlv + STRUCT_SIZE_OF (lldp_tlv_t, head) +
 			    lldp_tlv_get_length (tlv));
@@ -204,7 +348,7 @@ lldp_packet_scan (u32 hw_if_index, const lldp_tlv_t * pkt)
       return LLDP_ERROR_BAD_TLV;
     }
   lldp_rpc_update_peer (hw_if_index, chid, chid_len, chid_subtype, portid,
-			portid_len, portid_subtype, ttl);
+			portid_len, portid_subtype, ttl, sysname, sysname_len, sysdes, sysdes_len, pmgnt_ip4, pmgnt_ip4_len, pmgnt_ip6, pmgnt_ip6_len);
   return LLDP_ERROR_NONE;
 }
 
@@ -287,7 +431,8 @@ lldp_init (vlib_main_t * vm)
   lm->vnet_main = vnet_get_main ();
   lm->msg_tx_hold = 4;		/* default value per IEEE 802.1AB-2009 */
   lm->msg_tx_interval = 30;	/* default value per IEEE 802.1AB-2009 */
-
+	lm->log_default = vlib_log_register_class ("lldp_plugin", 0);		//注册日志
+	lm->pLLdpMib = hashmap_create();
   return 0;
 }
 

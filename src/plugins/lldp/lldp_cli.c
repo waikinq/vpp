@@ -27,6 +27,9 @@
 #include <net/ethernet.h>
 #endif
 
+FILE* pFileMib = NULL;
+
+
 static clib_error_t *
 lldp_cfg_err_to_clib_err (lldp_cfg_err_t e)
 {
@@ -313,179 +316,6 @@ VLIB_CLI_COMMAND(set_lldp_cmd, static) = {
   .function = lldp_cfg_cmd,
 };
 
-static const char *
-lldp_chassis_id_subtype_str (lldp_chassis_id_subtype_t t)
-{
-  switch (t)
-    {
-#define F(num, val, str) \
-  case num:              \
-    return str;
-      foreach_chassis_id_subtype (F)
-#undef F
-    }
-  return "unknown chassis subtype";
-}
-
-static const char *
-lldp_port_id_subtype_str (lldp_port_id_subtype_t t)
-{
-  switch (t)
-    {
-#define F(num, val, str) \
-  case num:              \
-    return str;
-      foreach_port_id_subtype (F)
-#undef F
-    }
-  return "unknown port subtype";
-}
-
-/*
- * format port id subtype&value
- *
- * @param va - 1st argument - unsigned - port id subtype
- * @param va - 2nd argument - u8* - port id
- * @param va - 3rd argument - unsigned - port id length
- * @param va - 4th argument - int - 1 for detailed output, 0 for simple
- */
-u8 *
-format_lldp_port_id (u8 * s, va_list * va)
-{
-  const lldp_port_id_subtype_t subtype = va_arg (*va, unsigned);
-  const u8 *id = va_arg (*va, u8 *);
-  const unsigned len = va_arg (*va, unsigned);
-  const int detail = va_arg (*va, int);
-  if (!id)
-    {
-      return s;
-    }
-  switch (subtype)
-    {
-    case LLDP_PORT_ID_SUBTYPE_NAME (intf_alias):
-      /* fallthrough */
-    case LLDP_PORT_ID_SUBTYPE_NAME (port_comp):
-      /* fallthrough */
-    case LLDP_PORT_ID_SUBTYPE_NAME (local):
-      /* fallthrough */
-    case LLDP_PORT_ID_SUBTYPE_NAME (intf_name):
-      if (detail)
-	{
-	  s = format (s, "%U(%s)", format_ascii_bytes, id, len,
-		      lldp_port_id_subtype_str (subtype));
-	}
-      else
-	{
-	  s = format (s, "%U", format_ascii_bytes, id, len);
-	}
-      break;
-    case LLDP_PORT_ID_SUBTYPE_NAME (mac_addr):
-      if (ETHER_ADDR_LEN == len)
-	{
-	  if (detail)
-	    {
-	      s = format (s, "%U(%s)", format_mac_address, id,
-			  lldp_port_id_subtype_str (subtype));
-	    }
-	  else
-	    {
-	      s = format (s, "%U", format_mac_address, id);
-	    }
-	  break;
-	}
-      /* fallthrough */
-    case LLDP_PORT_ID_SUBTYPE_NAME (net_addr):
-      /* TODO */
-      /* fallthrough */
-    default:
-      if (detail)
-	{
-	  s = format (s, "%U(%s)", format_hex_bytes, id, len,
-		      lldp_port_id_subtype_str (subtype));
-	}
-      else
-	{
-	  s = format (s, "%U", format_hex_bytes, id, len);
-	}
-      break;
-    }
-  return s;
-}
-
-/*
- * format chassis id subtype&value
- *
- * @param s format string
- * @param va - 1st argument - unsigned - chassis id subtype
- * @param va - 2nd argument - u8* - chassis id
- * @param va - 3rd argument - unsigned - chassis id length
- * @param va - 4th argument - int - 1 for detailed output, 0 for simple
- */
-u8 *
-format_lldp_chassis_id (u8 * s, va_list * va)
-{
-  const lldp_chassis_id_subtype_t subtype =
-    va_arg (*va, lldp_chassis_id_subtype_t);
-  const u8 *id = va_arg (*va, u8 *);
-  const unsigned len = va_arg (*va, unsigned);
-  const int detail = va_arg (*va, int);
-  if (!id)
-    {
-      return s;
-    }
-  switch (subtype)
-    {
-    case LLDP_CHASS_ID_SUBTYPE_NAME (chassis_comp):
-      /* fallthrough */
-    case LLDP_CHASS_ID_SUBTYPE_NAME (intf_alias):
-      /* fallthrough */
-    case LLDP_CHASS_ID_SUBTYPE_NAME (port_comp):
-      /* fallthrough */
-    case LLDP_PORT_ID_SUBTYPE_NAME (local):
-      /* fallthrough */
-    case LLDP_CHASS_ID_SUBTYPE_NAME (intf_name):
-      if (detail)
-	{
-	  s = format (s, "%U(%s)", format_ascii_bytes, id, len,
-		      lldp_chassis_id_subtype_str (subtype));
-	}
-      else
-	{
-	  s = format (s, "%U", format_ascii_bytes, id, len);
-	}
-      break;
-    case LLDP_CHASS_ID_SUBTYPE_NAME (mac_addr):
-      if (ETHER_ADDR_LEN == len)
-	{
-	  if (detail)
-	    {
-	      s = format (s, "%U(%s)", format_mac_address, id,
-			  lldp_chassis_id_subtype_str (subtype));
-	    }
-	  else
-	    {
-	      s = format (s, "%U", format_mac_address, id);
-	    }
-	  break;
-	}
-      /* fallthrough */
-    case LLDP_CHASS_ID_SUBTYPE_NAME (net_addr):
-      /* TODO */
-    default:
-      if (detail)
-	{
-	  s = format (s, "%U(%s)", format_hex_bytes, id, len,
-		      lldp_chassis_id_subtype_str (subtype));
-	}
-      else
-	{
-	  s = format (s, "%U", format_hex_bytes, id, len);
-	}
-      break;
-    }
-  return s;
-}
-
 /*
  * convert a tlv code to human-readable string
  */
@@ -687,6 +517,29 @@ format_lldp_intfs (u8 * s, va_list * va)
   return s;
 }
 
+static void write_mib(const char* key, void* value)
+{
+	if (pFileMib)
+	{
+		lldp_mib_t* mib = (lldp_mib_t*)value;
+		//lldp_log_info("LLDPdump:%ld,%u,%s,%s,%s,%s,%s", mib->last_heard, mib->ttl, mib->chassis_id, mib->port_id, mib->pmgnt_ip4, mib->sysname, mib->sysdes);
+		fprintf(pFileMib, "%ld,%u,%s,%s,%s,%s,%s,%s\n", mib->last_heard, mib->ttl, mib->chassis_id, mib->port_id, mib->pmgnt_ip4, mib->pmgnt_ip6, mib->sysname, mib->sysdes);
+	}
+}
+
+static void dump()
+{
+	pFileMib = fopen("/var/log/vpp/lldpmib", "w+");
+	fprintf(pFileMib, "LASTHEART,TTL,CHASSIS_ID,PORT_ID,MGNT_IPv4,MGNT_IPv6,SYSTEMNAME,SYSTEMDES\n");
+	
+	hashmap_foreach((&lldp_main)->pLLdpMib, write_mib);
+
+  fflush(pFileMib);
+  fclose(pFileMib);
+  pFileMib = NULL;
+}
+
+
 static clib_error_t *
 show_lldp (vlib_main_t * vm, unformat_input_t * input,
 	   CLIB_UNUSED (vlib_cli_command_t * lmd))
@@ -697,6 +550,10 @@ show_lldp (vlib_main_t * vm, unformat_input_t * input,
     {
       vlib_cli_output (vm, "%U\n", format_lldp_intfs, vm, lm, 1);
     }
+  else if(unformat (input, "dump"))
+    {
+    	dump();
+    }
   else
     {
       vlib_cli_output (vm, "%U\n", format_lldp_intfs, vm, lm, 0);
@@ -706,7 +563,7 @@ show_lldp (vlib_main_t * vm, unformat_input_t * input,
 
 VLIB_CLI_COMMAND(show_lldp_command, static) = {
   .path = "show lldp",
-  .short_help = "show lldp [detail]",
+  .short_help = "show lldp [detail|dump]",
   .function = show_lldp,
 };
 

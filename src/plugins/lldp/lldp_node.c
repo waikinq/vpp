@@ -326,6 +326,275 @@ lldp_hw_interface_up_down (vnet_main_t * vnm, u32 hw_if_index, u32 flags)
   return 0;
 }
 
+static const char *
+lldp_chassis_id_subtype_str (lldp_chassis_id_subtype_t t)
+{
+  switch (t)
+    {
+#define F(num, val, str) \
+  case num:              \
+    return str;
+      foreach_chassis_id_subtype (F)
+#undef F
+    }
+  return "unknown chassis subtype";
+}
+
+static const char *
+lldp_port_id_subtype_str (lldp_port_id_subtype_t t)
+{
+  switch (t)
+    {
+#define F(num, val, str) \
+  case num:              \
+    return str;
+      foreach_port_id_subtype (F)
+#undef F
+    }
+  return "unknown port subtype";
+}
+
+/*
+ * format port id subtype&value
+ *
+ * @param va - 1st argument - unsigned - port id subtype
+ * @param va - 2nd argument - u8* - port id
+ * @param va - 3rd argument - unsigned - port id length
+ * @param va - 4th argument - int - 1 for detailed output, 0 for simple
+ */
+u8 *
+format_lldp_port_id (u8 * s, va_list * va)
+{
+  const lldp_port_id_subtype_t subtype = va_arg (*va, unsigned);
+  const u8 *id = va_arg (*va, u8 *);
+  const unsigned len = va_arg (*va, unsigned);
+  const int detail = va_arg (*va, int);
+  if (!id)
+    {
+      return s;
+    }
+  switch (subtype)
+    {
+    case LLDP_PORT_ID_SUBTYPE_NAME (intf_alias):
+      /* fallthrough */
+    case LLDP_PORT_ID_SUBTYPE_NAME (port_comp):
+      /* fallthrough */
+    case LLDP_PORT_ID_SUBTYPE_NAME (local):
+      /* fallthrough */
+    case LLDP_PORT_ID_SUBTYPE_NAME (intf_name):
+      if (detail)
+	{
+	  s = format (s, "%U(%s)", format_ascii_bytes, id, len,
+		      lldp_port_id_subtype_str (subtype));
+	}
+      else
+	{
+	  s = format (s, "%U", format_ascii_bytes, id, len);
+	}
+      break;
+    case LLDP_PORT_ID_SUBTYPE_NAME (mac_addr):
+      if (ETHER_ADDR_LEN == len)
+	{
+	  if (detail)
+	    {
+	      s = format (s, "%U(%s)", format_mac_address, id,
+			  lldp_port_id_subtype_str (subtype));
+	    }
+	  else
+	    {
+	      s = format (s, "%U", format_mac_address, id);
+	    }
+	  break;
+	}
+      /* fallthrough */
+    case LLDP_PORT_ID_SUBTYPE_NAME (net_addr):
+      /* TODO */
+      /* fallthrough */
+    default:
+      if (detail)
+	{
+	  s = format (s, "%U(%s)", format_hex_bytes, id, len,
+		      lldp_port_id_subtype_str (subtype));
+	}
+      else
+	{
+	  s = format (s, "%U", format_hex_bytes, id, len);
+	}
+      break;
+    }
+  return s;
+}
+
+/*
+ * format chassis id subtype&value
+ *
+ * @param s format string
+ * @param va - 1st argument - unsigned - chassis id subtype
+ * @param va - 2nd argument - u8* - chassis id
+ * @param va - 3rd argument - unsigned - chassis id length
+ * @param va - 4th argument - int - 1 for detailed output, 0 for simple
+ */
+u8 *
+format_lldp_chassis_id (u8 * s, va_list * va)
+{
+  const lldp_chassis_id_subtype_t subtype =
+    va_arg (*va, lldp_chassis_id_subtype_t);
+  const u8 *id = va_arg (*va, u8 *);
+  const unsigned len = va_arg (*va, unsigned);
+  const int detail = va_arg (*va, int);
+  if (!id)
+    {
+      return s;
+    }
+  switch (subtype)
+    {
+    case LLDP_CHASS_ID_SUBTYPE_NAME (chassis_comp):
+      /* fallthrough */
+    case LLDP_CHASS_ID_SUBTYPE_NAME (intf_alias):
+      /* fallthrough */
+    case LLDP_CHASS_ID_SUBTYPE_NAME (port_comp):
+      /* fallthrough */
+    case LLDP_PORT_ID_SUBTYPE_NAME (local):
+      /* fallthrough */
+    case LLDP_CHASS_ID_SUBTYPE_NAME (intf_name):
+      if (detail)
+	{
+	  s = format (s, "%U(%s)", format_ascii_bytes, id, len,
+		      lldp_chassis_id_subtype_str (subtype));
+	}
+      else
+	{
+	  s = format (s, "%U", format_ascii_bytes, id, len);
+	}
+      break;
+    case LLDP_CHASS_ID_SUBTYPE_NAME (mac_addr):
+      if (ETHER_ADDR_LEN == len)
+	{
+	  if (detail)
+	    {
+	      s = format (s, "%U(%s)", format_mac_address, id,
+			  lldp_chassis_id_subtype_str (subtype));
+	    }
+	  else
+	    {
+	      s = format (s, "%U", format_mac_address, id);
+	    }
+	  break;
+	}
+      /* fallthrough */
+    case LLDP_CHASS_ID_SUBTYPE_NAME (net_addr):
+      /* TODO */
+    default:
+      if (detail)
+	{
+	  s = format (s, "%U(%s)", format_hex_bytes, id, len,
+		      lldp_chassis_id_subtype_str (subtype));
+	}
+      else
+	{
+	  s = format (s, "%U", format_hex_bytes, id, len);
+	}
+      break;
+    }
+  return s;
+}
+
+unsigned int hash_fnv1a(const void *key, size_t key_size) {
+    const unsigned char *bytes = key;
+    unsigned int hash = FNV_OFFSET;
+    for (size_t i = 0; i < key_size; i++) {
+        hash ^= bytes[i];
+        hash *= FNV_PRIME;
+    }
+    return hash;
+}
+
+HashMap* hashmap_create() {
+    HashMap *map = malloc(sizeof(HashMap));
+    map->capacity = INIT_CAPACITY;
+    map->size = 0;
+    map->buckets = calloc(map->capacity, sizeof(Node*));
+    return map;
+}
+
+static void _resize(HashMap *map, size_t new_cap) {
+    Node** new_buckets = calloc(new_cap, sizeof(Node*));
+    for (size_t i = 0; i < map->capacity; ++i) {
+        Node *node = map->buckets[i];
+        while (node) {
+            Node *next = node->next;
+            unsigned int new_idx = hash_fnv1a(node->key, node->key_size) % new_cap;
+            node->next = new_buckets[new_idx];
+            new_buckets[new_idx] = node;
+            node = next;
+        }
+    }
+    free(map->buckets);
+    map->buckets = new_buckets;
+    map->capacity = new_cap;
+}
+
+void hashmap_put(HashMap *map, void *key, size_t key_size, void *value) {
+    unsigned int index = hash_fnv1a(key, key_size) % map->capacity;
+    Node *node = map->buckets[index];
+      
+    while (node)
+    {
+    	if (node->key_size == key_size && memcmp(node->key, key, key_size) == 0) 
+    	{
+    			//不考虑哈希碰撞问题。冲突覆盖，原先的value需要释放
+    			free(node->value);
+          node->value = value;	
+          return;
+      }
+      node = node->next; 
+    }
+    
+    // 检查扩容条件
+    if ((float)map->size / map->capacity >= LOAD_FACTOR) {
+        _resize(map, map->capacity * 2);
+    }
+
+	node = malloc(sizeof(Node));
+
+	// 深拷贝键
+	node->key = malloc(key_size);
+	node->key_size = key_size;
+	memcpy(node->key, key, key_size);
+	
+	node->value = value;
+
+	//头插法
+	node->next = map->buckets[index];
+	map->buckets[index] = node;
+	map->size++;  
+}
+
+
+void* hashmap_get(HashMap *map, void *key, size_t key_size) {
+    unsigned int index = hash_fnv1a(key, key_size) % map->capacity;
+    Node *node = map->buckets[index];
+    
+    while (node) {
+        if (node->key_size == key_size && 
+            memcmp(node->key, key, key_size) == 0) {
+            return node->value;
+        }
+        node = node->next;
+    }
+    return NULL;
+}
+
+void hashmap_foreach(HashMap *map, void (*callback)(const char*, void*)) {
+    for (int i = 0; i < map->capacity; i++) {
+        Node *curr = map->buckets[i];
+        while (curr) {
+            callback(curr->key, curr->value);
+            curr = curr->next;
+        }
+    }
+  }
+
 VNET_HW_INTERFACE_LINK_UP_DOWN_FUNCTION (lldp_hw_interface_up_down);
 
 /*

@@ -27,6 +27,54 @@
 
 #include <lldp/lldp_protocol.h>
 
+#ifndef ETHER_ADDR_LEN
+#include <net/ethernet.h>
+#endif
+
+#define lldp_log_err(...) \
+  vlib_log(VLIB_LOG_LEVEL_ERR, lldp_main.log_default, __VA_ARGS__)
+#define lldp_log_warn(...) \
+  vlib_log(VLIB_LOG_LEVEL_WARNING, lldp_main.log_default, __VA_ARGS__)
+#define lldp_log_notice(...) \
+  vlib_log(VLIB_LOG_LEVEL_NOTICE, lldp_main.log_default, __VA_ARGS__)
+#define lldp_log_info(...) \
+  vlib_log(VLIB_LOG_LEVEL_INFO, lldp_main.log_default, __VA_ARGS__)
+
+//map定义
+#define INIT_CAPACITY 4999    	// 初始容量（质数减少冲突）
+#define LOAD_FACTOR 0.9    		// 扩容阈值
+#define FNV_OFFSET 2166136261u
+#define FNV_PRIME 16777619u
+
+//哈希桶节点
+typedef struct Node {
+    void *key;
+    void *value;
+    size_t key_size;
+    struct Node *next;	//指向下个节点的指针
+} Node;
+
+// 哈希表主体
+typedef struct {
+    Node** buckets;
+    size_t capacity;
+    size_t size;
+} HashMap;
+
+typedef struct lldp_mib
+{
+	u64 last_heard;
+	u16 ttl;
+
+  u8 *chassis_id;
+  u8 *port_id;
+	u8 *sysname;
+	u8 *sysdes;
+  u8 *pmgnt_ip4;
+  u8 *pmgnt_ip6;
+} lldp_mib_t;
+
+
 typedef struct lldp_intf
 {
   /* hw interface index */
@@ -100,6 +148,8 @@ typedef struct
    * be changed by management to any value in the range 1 through 3600.
    */
   u16 msg_tx_interval;
+  vlib_log_class_t log_default;	//日志
+  HashMap* pLLdpMib;			//Mib表
 } lldp_main_t;
 
 #define LLDP_MIN_TX_HOLD (1)
@@ -144,6 +194,15 @@ u8 *lldp_input_format_trace (u8 * s, va_list * args);
 void lldp_send_ethernet (lldp_main_t * lm, lldp_intf_t * n, int shutdown);
 void lldp_schedule_intf (lldp_main_t * lm, lldp_intf_t * n);
 void lldp_unschedule_intf (lldp_main_t * lm, lldp_intf_t * n);
+u8 *format_lldp_port_id (u8 * s, va_list * va);
+u8 *format_lldp_chassis_id (u8 * s, va_list * va);
+
+//HashMap
+unsigned int hash_fnv1a(const void *key, size_t key_size);
+HashMap* hashmap_create();
+void hashmap_put(HashMap *map, void *key, size_t key_size, void *value);
+void* hashmap_get(HashMap *map, void *key, size_t key_size);
+void hashmap_foreach(HashMap *map, void (*callback)(const char*, void*));
 
 #endif /* __included_lldp_node_h__ */
 

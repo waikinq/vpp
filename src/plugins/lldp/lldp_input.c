@@ -335,6 +335,7 @@ lldp_packet_scan (u32 hw_if_index, const lldp_tlv_t * pkt)
 		break;
 	default:
 		lldp_log_info("TLV##%u", lldp_tlv_get_code (tlv));
+		break;
 	  //return LLDP_ERROR_BAD_TLV;
 	}
       tlv = (lldp_tlv_t *) ((u8 *) tlv + STRUCT_SIZE_OF (lldp_tlv_t, head) +

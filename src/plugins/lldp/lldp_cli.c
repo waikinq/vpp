@@ -22,6 +22,7 @@
 #include <vnet/ip/ip.h>
 #include <lldp/lldp.h>
 #include <lldp/lldp_node.h>
+#include <time.h>
 
 #ifndef ETHER_ADDR_LEN
 #include <net/ethernet.h>
@@ -517,13 +518,18 @@ format_lldp_intfs (u8 * s, va_list * va)
   return s;
 }
 
+static time_t g_dump_time;
 static void write_mib(const char* key, void* value)
 {
 	if (pFileMib)
 	{
 		lldp_mib_t* mib = (lldp_mib_t*)value;
 		//lldp_log_info("LLDPdump:%ld,%u,%s,%s,%s,%s,%s", mib->last_heard, mib->ttl, mib->chassis_id, mib->port_id, mib->pmgnt_ip4, mib->sysname, mib->sysdes);
-		fprintf(pFileMib, "%ld,%u,%s,%s,%s,%s,%s,%s\n", mib->last_heard, mib->ttl, mib->chassis_id, mib->port_id, mib->pmgnt_ip4, mib->pmgnt_ip6, mib->sysname, mib->sysdes);
+		extern time_t g_dump_time;
+		if (mib->last_heard + mib->ttl > g_dump_time)	//有效邻居才输出
+		{
+			fprintf(pFileMib, "%ld,%u,%s,%s,%s,%s,%s,%s\n", mib->last_heard, mib->ttl, mib->chassis_id, mib->port_id, mib->pmgnt_ip4, mib->pmgnt_ip6, mib->sysname, mib->sysdes);
+		}
 	}
 }
 
@@ -531,7 +537,8 @@ static void dump()
 {
 	pFileMib = fopen("/var/log/vpp/lldpmib", "w+");
 	fprintf(pFileMib, "LASTHEART,TTL,CHASSIS_ID,PORT_ID,MGNT_IPv4,MGNT_IPv6,SYSTEMNAME,SYSTEMDES\n");
-	
+
+	g_dump_time = time(NULL);
 	hashmap_foreach((&lldp_main)->pLLdpMib, write_mib);
 
   fflush(pFileMib);
